@@ -1778,6 +1778,31 @@ limits, the equality constraint approach will generate a softer transition betwe
 regime. It will also be active all the time, which is convenient in user code that needs the constraint violation or
 constraint force as input.
 
+Alternatively, a :ref:`dcmotor<actuator-dcmotor>` actuator can carry the backlash internally, without the extra degree
+of freedom. The rotor is then represented by two activation variables -- its velocity and the tooth deflection relative
+to the load -- so the model keeps a single joint and allocates no constraint. Inside the deadband the transmission is
+disconnected: the load receives no torque and the motor torque accelerates the rotor against its own inertia alone,
+which is the regime the two-joint model approximates. Because the rotor is no longer rigidly locked to the joint, its
+inertia belongs to the actuator rather than to the mass matrix, and :at:`armature` must be zero.
+
+There is no shortcut attribute for this yet, so the parameters are set on the underlying :el:`general` element:
+:ref:`dynprm<actuator-general-dynprm>`\[9\] is the rotor inertia (positive values enable backlash), and
+:ref:`biasprm<actuator-general-biasprm>`\[6:9\] are the deadband half-width, the mesh stiffness and the mesh damping,
+all in the actuator's output coordinates:
+
+.. code-block:: xml
+
+   <general joint="J1" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+            actearly="true" actdim="2"
+            dynprm="0 0 0 0 0 0 0 0 0 0.01"
+            gainprm="1 1"
+            biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+
+The mesh stiffness plays the role that :at:`solref` plays for the joint limit above, making the backlash rotation end at
+a softer or a harder limit. The rotor state is integrated implicitly in the mesh spring-damper, so stiff meshes remain
+stable; note that this local implicit treatment does not apply under the ``RK4`` integrator, which integrates the raw
+activation derivatives.
+
 .. _CRestitution:
 
 Restitution

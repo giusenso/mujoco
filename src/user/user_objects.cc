@@ -7363,6 +7363,23 @@ void mjCActuator::Compile(void) {
                    name.c_str(), id);
   }
 
+  // backlash carries the rotor inertia in its own state: reflecting it into the mass matrix as
+  // well would count it twice, and the rotor cannot be both free and locked to the joint
+  if (dyntype == mjDYN_DCMOTOR && dynprm[9] > 0) {
+    if (armature != 0) {
+      throw mjCError(this, "armature must be zero when backlash is enabled, actuator '%s' "
+                     "(id = %d): the rotor inertia is dynprm[9]", name.c_str(), id);
+    }
+    if (biasprm[7] <= 0) {
+      throw mjCError(this, "backlash requires positive mesh stiffness biasprm[7], actuator '%s' "
+                     "(id = %d)", name.c_str(), id);
+    }
+    if (biasprm[6] < 0) {
+      throw mjCError(this, "backlash deadband biasprm[6] cannot be negative, actuator '%s' "
+                     "(id = %d)", name.c_str(), id);
+    }
+  }
+
   // check muscle parameters
   for (int i=0; i < 2; i++) {
     // select gain or bias

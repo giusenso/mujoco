@@ -53,12 +53,17 @@ MJAPI mjtNum mju_muscleDynamics(mjtNum ctrl, mjtNum act, const mjtNum prm[3]);
 // LuGre Stribeck function: g(v) = F_C + (F_S - F_C) * exp(-(v/v_S)^2)
 mjtNum mj_lugreStribeck(mjtNum velocity, mjtNum F_C, mjtNum F_S, mjtNum v_S);
 
+// backlash mesh excursion: signed distance of deflection outside the deadband [-b, b]
+mjtNum mj_backlashExcursion(mjtNum deflection, mjtNum halfwidth);
+
 // DC motor activation slot indices (-1 = slot not active)
 typedef struct {
   int slew;         // slew rate state
   int integral;     // integral state
   int temperature;  // temperature state
   int bristle;      // LuGre bristle state
+  int rotor;        // backlash rotor velocity state
+  int deflection;   // backlash tooth deflection state, must follow rotor (see mj_nextActivation)
   int current;      // current state
   int num_slots;    // number of DC motor states
 } mjDCMotorSlots;

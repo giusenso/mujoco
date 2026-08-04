@@ -2405,7 +2405,17 @@ void mjd_actuator_vel(const mjModel* m, mjData* d) {
     else if (m->actuator_biastype[i] == mjBIAS_DCMOTOR) {
       const mjtNum* dynprm = m->actuator_dynprm + mjNDYN*i;
       const mjtNum* gainprm = m->actuator_gainprm + mjNGAIN*i;
-      if (dynprm[0] <= 0) {
+
+      // backlash: the load is driven by the mesh, not by the motor, so the electrical terms
+      // act on the rotor (integrated separately) and only the mesh spring-damper is seen here
+      if (dynprm[9] > 0) {
+        const mjtNum* biasprm = m->actuator_biasprm + mjNBIAS*i;
+        mjDCMotorSlots slots = mj_dcmotorSlots(dynprm, gainprm);
+        mjtNum delta = d->act[m->actuator_actadr[i] + slots.deflection];
+        if (mj_backlashExcursion(delta, biasprm[6])) {
+          bias_vel -= biasprm[8] + m->opt.timestep*biasprm[7];
+        }
+      } else if (dynprm[0] <= 0) {
         mjtNum R = mju_max(mjMINVAL, gainprm[0]);
         mjtNum K = gainprm[1];
         bias_vel -= K * K / R;
@@ -2428,7 +2438,8 @@ void mjd_actuator_vel(const mjModel* m, mjData* d) {
     }
 
     // DC motor controller damping and LuGre micro-damping
-    else if (m->actuator_gaintype[i] == mjGAIN_DCMOTOR) {
+    else if (m->actuator_gaintype[i] == mjGAIN_DCMOTOR &&
+             m->actuator_dynprm[mjNDYN*i + 9] <= 0) {  // backlash: these act on the rotor
       const mjtNum* dynprm = m->actuator_dynprm + mjNDYN*i;
       const mjtNum* gainprm = m->actuator_gainprm + mjNGAIN*i;
       mjtNum te = dynprm[0];

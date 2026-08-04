@@ -746,6 +746,44 @@ mjtNum mj_nextActivation(const mjModel* m, const mjData* d,
       act = exp_ah * act + int_h * velocity;
     }
 
+    // backlash rotor: linearly-implicit in the mesh spring-damper
+    //   J_r*omega_r_dot = tau_m - k*e - c*(omega_r - v)
+    // treating the load velocity and the deadband offset as constant over the step. An explicit
+    // update would cap the usable mesh stiffness orders of magnitude below a real gear mesh.
+    else if (offset == slots.rotor) {
+      const mjtNum* biasprm = m->actuator_biasprm + mjNBIAS*actuator_id;
+      mjtNum J_r = dynprm[9];   // rotor inertia
+      mjtNum b = biasprm[6];    // deadband half-width
+      mjtNum k = biasprm[7];    // mesh stiffness
+      mjtNum c = biasprm[8];    // mesh damping
+      mjtNum h = m->opt.timestep;
+      int adr = m->actuator_actadr[actuator_id];
+      mjtNum delta = d->act[adr + slots.deflection];
+      mjtNum velocity = d->actuator_velocity[m->actuator_outadr[actuator_id]];
+
+      // stiffness and damping vanish inside the deadband, freezing the band offset over the step
+      mjtNum e = mj_backlashExcursion(delta, b);
+      mjtNum kappa = e ? k : 0;
+      mjtNum gamma = e ? c : 0;
+
+      // recover the motor torque from act_dot, so nothing extra needs storing
+      mjtNum torque_motor = J_r*act_dot + kappa*e + gamma*(act - velocity);
+
+      // implicit in omega_r; collapses to plain Euler during free play (kappa = gamma = 0)
+      mjtNum rhs = torque_motor - kappa*e + (h*kappa + gamma)*velocity;
+      act = (act + (h/J_r)*rhs) / (1 + h*(h*kappa + gamma)/J_r);
+    }
+
+    // backlash deflection: delta(h) = delta + h*(omega_r(h) - v), using the rotor velocity already
+    // advanced by the branch above. Only reached from the ascending in-place loop in mj_advance,
+    // where the rotor slot precedes this one; the generic force path never indexes these slots
+    // because a DC motor with no current state reads ctrl rather than act.
+    else if (offset == slots.deflection) {
+      mjtNum velocity = d->actuator_velocity[m->actuator_outadr[actuator_id]];
+      mjtNum omega_next = d->act[m->actuator_actadr[actuator_id] + slots.rotor];
+      act = act + m->opt.timestep*(omega_next - velocity);
+    }
+
     // integral state: Euler integration with anti-windup clamp
     else if (offset == slots.integral) {
       act = act + act_dot * m->opt.timestep;

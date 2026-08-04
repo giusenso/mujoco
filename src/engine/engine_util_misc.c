@@ -1198,13 +1198,24 @@ mjtNum mj_lugreStribeck(mjtNum velocity, mjtNum F_C, mjtNum F_S, mjtNum v_S) {
 }
 
 
+// backlash mesh excursion: signed distance of deflection outside the deadband [-b, b]
+mjtNum mj_backlashExcursion(mjtNum deflection, mjtNum halfwidth) {
+  return (deflection > halfwidth)  ? deflection - halfwidth :
+         (deflection < -halfwidth) ? deflection + halfwidth : 0;
+}
+
+
 // compute DC motor activation slot indices from parameter arrays
 mjDCMotorSlots mj_dcmotorSlots(const mjtNum* dynprm, const mjtNum* gainprm) {
-  mjDCMotorSlots s = {-1, -1, -1, -1, -1, 0};
+  mjDCMotorSlots s = {-1, -1, -1, -1, -1, -1, -1, 0};
   if (dynprm[7] > 0)  s.slew        = s.num_slots++;  // slew rate limiting
   if (gainprm[5] > 0) s.integral    = s.num_slots++;  // PI integral
   if (dynprm[2] > 0)  s.temperature = s.num_slots++;  // thermal model
   if (dynprm[5] > 0)  s.bristle     = s.num_slots++;  // LuGre bristle
+  if (dynprm[9] > 0) {                                // backlash: rotor + deflection
+    s.rotor      = s.num_slots++;
+    s.deflection = s.num_slots++;
+  }
   if (dynprm[0] > 0)  s.current     = s.num_slots++;  // current filter
 
   return s;
