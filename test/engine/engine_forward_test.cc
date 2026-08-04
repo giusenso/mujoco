@@ -17,8 +17,10 @@
 #include "src/engine/engine_forward.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <string>
 #include <vector>
@@ -67,6 +69,8 @@ using ::testing::Pointwise;
 
 using ::testing::_;
 using ::testing::Gt;
+using ::testing::HasSubstr;
+using ::testing::IsNull;
 using ::testing::Ne;
 using ::testing::NotNull;
 
@@ -2497,6 +2501,500 @@ TEST_F(DCMotorTest, LuGreBristleSpring) {
   mj_forward(model.get(), data.get());
 
   EXPECT_NEAR(data->actuator_force[0], -sigma0 * X, MjTol(1e-12, 1e-5));
+}
+
+// ----------------------- backlash ---------------------------------------------
+
+// In-actuator backlash carries the rotor in two activation states instead of an extra degree of
+// freedom. These tests pin the physics against the two-joint deadband model documented in
+// modeling.rst, which is the reference this feature replaces:
+//
+//   backlash                            reference
+//   --------                            ---------
+//   1 hinge (the load)                  2 coincident hinges
+//   rotor velocity + tooth deflection   hinge 1 carries armature, hinge 2 is a limited deadband
+//   in act, no constraint               joint-limit constraint when the teeth touch
+//
+// J_r = dynprm[9] gates the feature; biasprm[6..8] are the deadband half-width, mesh stiffness
+// and mesh damping. Raw <general> is used because there is no shorthand attribute yet.
+using DCMotorBacklashTest = MujocoTest;
+
+static constexpr char kBacklashXml[] = R"(
+<mujoco>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <body>
+      <joint name="load" type="hinge" axis="0 0 1"/>
+      <geom type="cylinder" size="0.1 0.1" mass="1"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+             actearly="true" actdim="2"
+             dynprm="0 0 0 0 0 0 0 0 0 0.01"
+             gainprm="1 1"
+             biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+  </actuator>
+</mujoco>
+)";
+
+// the equivalent two-joint reference: same rotor inertia, load, gap and motor
+static constexpr char kReferenceXml[] = R"(
+<mujoco>
+  <compiler angle="radian"/>
+  <option timestep="0.002" integrator="implicitfast"/>
+  <worldbody>
+    <body>
+      <joint name="rotor" type="hinge" axis="0 0 1" armature="0.01"/>
+      <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9"/>
+      <body>
+        <joint name="gap" type="hinge" axis="0 0 1" limited="true"
+               range="-0.05 0.05" solreflimit="0.002 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <general joint="rotor" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+             actearly="true" actdim="0" dynprm="0" gainprm="1 1" biasprm="0"/>
+  </actuator>
+</mujoco>
+)";
+
+// backlash costs two activations and no degree of freedom, which is the point of the feature
+TEST_F(DCMotorBacklashTest, NoExtraDegreeOfFreedom) {
+  char error[1024];
+  MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(backlash.get(), NotNull()) << error;
+  MjModelPtr reference = LoadModelFromString(kReferenceXml, error, sizeof(error));
+  ASSERT_THAT(reference.get(), NotNull()) << error;
+
+  EXPECT_EQ(backlash->nv, 1);
+  EXPECT_EQ(backlash->na, 2);
+  EXPECT_EQ(reference->nv, 2);
+  EXPECT_EQ(reference->na, 0);
+
+  // the reference needs a constraint to hold the teeth; backlash never allocates one
+  MjDataPtr data_backlash = MakeData(backlash);
+  MjDataPtr data_reference = MakeData(reference);
+  data_backlash->ctrl[0] = 1;
+  data_reference->ctrl[0] = 1;
+  for (int i = 0; i < 200; i++) {
+    mj_step(backlash.get(), data_backlash.get());
+    mj_step(reference.get(), data_reference.get());
+  }
+  EXPECT_EQ(data_backlash->nefc, 0);
+  EXPECT_GT(data_reference->nefc, 0);
+}
+
+// inside the deadband the transmission is disconnected: the load receives no torque at all, and
+// the motor torque accelerates the rotor alone. This is the property a deadband spring on the
+// output cannot reproduce, because there the motor torque still reaches the load.
+TEST_F(DCMotorBacklashTest, FreePlayDecouplesLoad) {
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  int adr = model->actuator_actadr[0];
+  double J_r = model->actuator_dynprm[mjNDYN * 0 + 9];
+  double h = model->opt.timestep;
+
+  data->ctrl[0] = 1;
+  mj_forward(model.get(), data.get());
+
+  // no deflection yet, so nothing is transmitted
+  EXPECT_MJTNUM_EQ(data->actuator_force[0], 0);
+  EXPECT_MJTNUM_EQ(data->qacc[0], 0);
+
+  // the rotor accelerates at tau/J_r against its own inertia only
+  EXPECT_NEAR(data->act_dot[adr], 1 / J_r, MjTol(1e-12, 1e-5));
+
+  mj_step(model.get(), data.get());
+  EXPECT_NEAR(data->act[adr], h / J_r, MjTol(1e-12, 1e-5));
+  EXPECT_MJTNUM_EQ(data->qvel[0], 0);
+
+  // the load stays exactly still for the whole traverse of the half-gap
+  for (int i = 0; i < 10; i++) {
+    mj_step(model.get(), data.get());
+    EXPECT_MJTNUM_EQ(data->qvel[0], 0);
+    EXPECT_MJTNUM_EQ(data->qpos[0], 0);
+  }
+}
+
+// engagement timing agrees with the reference: the rotor must sweep the half-gap under
+// tau/J_r before the load is touched, and both models cross at the analytic time
+TEST_F(DCMotorBacklashTest, EngagementTimingMatchesReference) {
+  char error[1024];
+  MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(backlash.get(), NotNull()) << error;
+  MjModelPtr reference = LoadModelFromString(kReferenceXml, error, sizeof(error));
+  ASSERT_THAT(reference.get(), NotNull()) << error;
+
+  auto time_to_engage = [](const MjModelPtr& model, bool is_reference) {
+    MjDataPtr data = MakeData(model);
+    data->ctrl[0] = 1;
+    for (int i = 0; i < 4000; i++) {
+      mj_step(model.get(), data.get());
+      double load_velocity =
+          is_reference ? data->qvel[1] + data->qvel[0] : data->qvel[0];
+      if (std::abs(load_velocity) > 1e-9) return data->time;
+    }
+    return -1.0;
+  };
+
+  double backlash_time = time_to_engage(backlash, false);
+  double reference_time = time_to_engage(reference, true);
+  ASSERT_GT(backlash_time, 0);
+  ASSERT_GT(reference_time, 0);
+
+  // both are within a few timesteps of each other
+  EXPECT_NEAR(backlash_time, reference_time, 10 * backlash->opt.timestep);
+}
+
+// once the teeth touch, rotor and load co-move and the pair reaches the same steady state as the
+// reference model
+TEST_F(DCMotorBacklashTest, EngagedMatchesReference) {
+  char error[1024];
+  MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(backlash.get(), NotNull()) << error;
+  MjModelPtr reference = LoadModelFromString(kReferenceXml, error, sizeof(error));
+  ASSERT_THAT(reference.get(), NotNull()) << error;
+
+  MjDataPtr data_backlash = MakeData(backlash);
+  MjDataPtr data_reference = MakeData(reference);
+  data_backlash->ctrl[0] = 1;
+  data_reference->ctrl[0] = 1;
+  for (int i = 0; i < 2000; i++) {
+    mj_step(backlash.get(), data_backlash.get());
+    mj_step(reference.get(), data_reference.get());
+  }
+
+  // no-load speed: K = R = 1, so omega -> V/K = 1
+  double reference_velocity = data_reference->qvel[0] + data_reference->qvel[1];
+  EXPECT_NEAR(data_backlash->qvel[0], 1, 1e-6);
+  EXPECT_NEAR(data_backlash->qvel[0], reference_velocity, 1e-6);
+
+  // rotor and load are locked together through the mesh
+  int adr = backlash->actuator_actadr[0];
+  EXPECT_NEAR(data_backlash->act[adr], data_backlash->qvel[0], 1e-6);
+
+  // a frictionless load needs no torque to hold speed, so the teeth rest at the band edge
+  double half_gap = backlash->actuator_biasprm[mjNBIAS * 0 + 6];
+  EXPECT_NEAR(std::abs(data_backlash->act[adr + 1]), half_gap, half_gap * 1e-3);
+
+  // positions agree to within the lost motion, which is a fraction of the gap
+  double reference_position = data_reference->qpos[0] + data_reference->qpos[1];
+  EXPECT_NEAR(data_backlash->qpos[0], reference_position, 2 * half_gap);
+}
+
+// reversing the drive opens the other flank: the transmitted torque returns to exactly zero and
+// the deflection traverses the full gap before contact is remade
+TEST_F(DCMotorBacklashTest, ReversalTraversesGapWithZeroTorque) {
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  int adr = model->actuator_actadr[0];
+  double half_gap = model->actuator_biasprm[mjNBIAS * 0 + 6];
+
+  data->ctrl[0] = 1;
+  for (int i = 0; i < 2000; i++) mj_step(model.get(), data.get());
+  ASSERT_GT(data->act[adr + 1], 0);  // driving the leading flank
+
+  double position_at_reversal = data->qpos[0];
+  data->ctrl[0] = -1;
+
+  // while the teeth are inside the band the load must be driven by nothing
+  bool saw_free_play = false;
+  for (int i = 0; i < 2000; i++) {
+    mj_step(model.get(), data.get());
+    if (std::abs(data->act[adr + 1]) < half_gap) {
+      saw_free_play = true;
+      EXPECT_MJTNUM_EQ(data->actuator_force[0], 0);
+    }
+  }
+  EXPECT_TRUE(saw_free_play);
+
+  // contact is remade on the opposite flank
+  EXPECT_NEAR(data->act[adr + 1], -half_gap, half_gap * 1e-3);
+
+  // lost motion: the load reverses, but only after the gap is crossed
+  EXPECT_LT(data->qpos[0], position_at_reversal);
+}
+
+// a zero deadband is a pure compliant mesh: there is no play, so the load never fully decouples
+TEST_F(DCMotorBacklashTest, ZeroDeadbandHasNoPlay) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  data->ctrl[0] = 1;
+  for (int i = 0; i < 50; i++) mj_step(model.get(), data.get());
+
+  // the load picks up motion immediately through the stiff mesh
+  EXPECT_GT(data->qvel[0], 0);
+  EXPECT_GT(data->qpos[0], 0);
+}
+
+// back-EMF is generated by the rotor, so a rotor spinning freely inside the gap must still be
+// limited to the no-load speed. Reading the load velocity instead would let it run away.
+TEST_F(DCMotorBacklashTest, BackEmfLimitsFreeRotor) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 1e4 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  // the deadband is enormous, so the rotor never engages the load
+  int adr = model->actuator_actadr[0];
+  data->ctrl[0] = 1;
+  for (int i = 0; i < 20000; i++) mj_step(model.get(), data.get());
+
+  EXPECT_MJTNUM_EQ(data->qvel[0], 0);       // load never touched
+  EXPECT_NEAR(data->act[adr], 1, 1e-6);     // rotor settles at V/K = 1
+}
+
+// gravity back-drives the load across the gap: with the motor off, a loaded joint falls freely
+// until the teeth catch, which is the behaviour backlash exists to model
+TEST_F(DCMotorBacklashTest, BackDrivenLoadFallsThroughGap) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body pos="0 0 0">
+        <joint name="load" type="hinge" axis="0 1 0"/>
+        <geom type="capsule" fromto="0 0 0 0.3 0 0" size="0.02" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  int adr = model->actuator_actadr[0];
+  data->ctrl[0] = 0;
+
+  // the load swings down under gravity, initially with no torque from the motor at all:
+  // rotation about +y carries the +x arm toward -z, so qacc is positive
+  mj_forward(model.get(), data.get());
+  EXPECT_MJTNUM_EQ(data->actuator_force[0], 0);
+  EXPECT_GT(data->qacc[0], 0);
+  EXPECT_MJTNUM_EQ(data->act[adr], 0);  // rotor still at rest
+
+  for (int i = 0; i < 100; i++) mj_step(model.get(), data.get());
+
+  // the load has fallen and wound the deflection onto the trailing flank, which then drags the
+  // rotor along: this is back-driving through the gap
+  EXPECT_GT(data->qpos[0], 0);
+  double half_gap = model->actuator_biasprm[mjNBIAS * 0 + 6];
+  EXPECT_LT(data->act[adr + 1], -half_gap * 0.99);
+  EXPECT_GT(data->act[adr], 0);              // rotor is being back-driven
+  EXPECT_LT(data->actuator_force[0], 0);     // mesh now resists the fall
+}
+
+// the rotor state must be integrated implicitly in the mesh spring: an explicit update caps the
+// usable stiffness orders of magnitude below a real gear mesh
+TEST_F(DCMotorBacklashTest, StiffMeshIsStable) {
+  static constexpr char xml_template[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0.05 1e6 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml_template, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  data->ctrl[0] = 1;
+  for (int i = 0; i < 5000; i++) {
+    mj_step(model.get(), data.get());
+    ASSERT_FALSE(mju_isBad(data->qvel[0])) << "diverged at step " << i;
+  }
+  EXPECT_NEAR(data->qvel[0], 1, 0.1);  // approaching the no-load speed
+  EXPECT_EQ(data->warning[mjWARN_BADQACC].number, 0);
+}
+
+// backlash must not silently double-count the rotor inertia: armature reflects it into the mass
+// matrix, which would also lock the rotor to the joint
+TEST_F(DCMotorBacklashTest, ArmatureWithBacklashIsRejected) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2" armature="0.01"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  EXPECT_THAT(model.get(), IsNull());
+  EXPECT_THAT(error, HasSubstr("armature must be zero when backlash is enabled"));
+}
+
+// a mesh with no stiffness would transmit nothing at all
+TEST_F(DCMotorBacklashTest, ZeroMeshStiffnessIsRejected) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0.05 0 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  EXPECT_THAT(model.get(), IsNull());
+  EXPECT_THAT(error, HasSubstr("mesh stiffness"));
+}
+
+// backlash composes with the other DC motor features without disturbing the slot layout
+TEST_F(DCMotorBacklashTest, ComposesWithOtherStates) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="4"
+               dynprm="0.001 0 0 0 0 100 0.5 0 0 0.01"
+               gainprm="1 1 0 0 0 0"
+               biasprm="0 0 0 0.5 0.8 0.5 0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  // bristle, rotor, deflection, current -- the current state stays last
+  ASSERT_EQ(model->actuator_actnum[0], 4);
+
+  data->ctrl[0] = 1;
+  for (int i = 0; i < 2000; i++) {
+    mj_step(model.get(), data.get());
+    ASSERT_FALSE(mju_isBad(data->qvel[0])) << "diverged at step " << i;
+  }
+  EXPECT_EQ(data->warning[mjWARN_BADQACC].number, 0);
+  EXPECT_GT(data->qvel[0], 0);
+}
+
+// in-actuator backlash should step faster than the two-joint reference, because it removes a
+// degree of freedom, a body and the joint-limit constraint. Timing is machine dependent, so this
+// asserts the structural savings and only reports the wall clock.
+TEST_F(DCMotorBacklashTest, CheaperThanReference) {
+  char error[1024];
+  MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(backlash.get(), NotNull()) << error;
+  MjModelPtr reference = LoadModelFromString(kReferenceXml, error, sizeof(error));
+  ASSERT_THAT(reference.get(), NotNull()) << error;
+
+  EXPECT_LT(backlash->nv, reference->nv);
+  EXPECT_LT(backlash->nbody, reference->nbody);
+
+  // the reference loses the simple-body fast path that the single-joint model keeps
+  EXPECT_EQ(backlash->body_simple[1], 1);
+  EXPECT_EQ(reference->body_simple[1], 0);
+
+  static constexpr int kNumSteps = 20000;
+  auto run = [](const MjModelPtr& model) {
+    MjDataPtr data = MakeData(model);
+    data->ctrl[0] = 1;
+    for (int i = 0; i < 500; i++) mj_step(model.get(), data.get());  // reach engagement
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < kNumSteps; i++) mj_step(model.get(), data.get());
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    return std::chrono::duration<double, std::micro>(elapsed).count() / kNumSteps;
+  };
+
+  double backlash_us = run(backlash);
+  double reference_us = run(reference);
+  std::cerr << "backlash  " << backlash_us << " us/step (nv=" << backlash->nv << ")\n"
+            << "reference " << reference_us << " us/step (nv=" << reference->nv << ")\n"
+            << "speedup   " << reference_us / backlash_us << "x\n";
 }
 
 // ----------------------- filterexact actuators -------------------------------
