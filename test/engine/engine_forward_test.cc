@@ -73,6 +73,7 @@ using ::testing::Gt;
 using ::testing::HasSubstr;
 using ::testing::IsNull;
 using ::testing::Ne;
+using ::testing::Not;
 using ::testing::NotNull;
 
 // --------------------------- activation limits -------------------------------
@@ -2995,6 +2996,70 @@ TEST_F(DCMotorBacklashTest, ShortcutRejectsBadParameters) {
   EXPECT_THAT(error, HasSubstr("mesh stiffness"));
   EXPECT_THAT(LoadModelFromString(negative_xml, error, sizeof(error)).get(), IsNull());
   EXPECT_THAT(error, HasSubstr("deadband"));
+}
+
+// The mesh spring-damper is bilateral while a real tooth flank can only push, so an overdamped mesh
+// can transmit torque through a flank that should have separated. That is a warning rather than an
+// error: overdamping is stable under the linearly-implicit rotor update, it simply is not a physical
+// mesh, so the model must still load and run.
+TEST_F(DCMotorBacklashTest, OverdampedMeshWarnsButLoads) {
+  // c_crit = 2*sqrt(k*J_r) = 2*sqrt(1e4*0.01) = 20
+  static constexpr char critical_xml[] = R"(
+  <mujoco>
+    <option integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1" backlash="0.01 0.05 1e4 20"/>
+    </actuator>
+  </mujoco>
+  )";
+  static constexpr char overdamped_xml[] = R"(
+  <mujoco>
+    <option integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1" backlash="0.01 0.05 1e4 50"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+
+  // exactly critical is silent
+  error[0] = '\0';
+  mjModel* critical = LoadModelFromString(critical_xml, error, sizeof(error)).release();
+  ASSERT_THAT(critical, NotNull()) << error;
+  EXPECT_THAT(error, Not(HasSubstr("critical damping")));
+  mj_deleteModel(critical);
+
+  // 2.5x critical warns, and the warning arrives through the load error buffer
+  mock_warning_handler.ExpectWarnings("exceeds critical damping");
+  error[0] = '\0';
+  mjModel* overdamped = LoadModelFromString(overdamped_xml, error, sizeof(error)).release();
+  ASSERT_THAT(overdamped, NotNull());
+  EXPECT_THAT(error, HasSubstr("exceeds critical damping"));
+
+  // and it still integrates: a warning must not imply a broken model. mj_checkAcc silently resets
+  // the state on a bad qacc, so isfinite() alone would not notice divergence -- check the counter.
+  mjData* data = mj_makeData(overdamped);
+  for (int i = 0; i < 2000; i++) {
+    data->ctrl[0] = 1;
+    mj_step(overdamped, data);
+  }
+  EXPECT_EQ(data->warning[mjWARN_BADQACC].number, 0);
+  EXPECT_TRUE(std::isfinite(data->qpos[0]));
+  EXPECT_TRUE(std::isfinite(data->act[0]));
+  mj_deleteData(data);
+  mj_deleteModel(overdamped);
 }
 
 // backlash must be inheritable from a default class and overridable per actuator, which is the
