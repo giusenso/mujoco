@@ -6953,8 +6953,11 @@ This element has the following custom attributes in addition to the common attri
    and the tooth deflection relative to the load, and :at:`armature` must then be zero because the rotor inertia is
    carried here instead of in the mass matrix. :at-val:`deadband` is the half-width of the gap: within it the
    transmission is disconnected and the load receives no torque, outside it the load is driven through a spring-damper
-   of the given :at-val:`stiffness` and :at-val:`damping`. This is an alternative to the two-joint construction in
-   :ref:`Backlash<CBacklash>`, trading an exact complementarity limit for one fewer degree of freedom.
+   of the given :at-val:`stiffness` and :at-val:`damping`. Keep :at-val:`damping` below critical,
+   2·sqrt(:at-val:`stiffness`·:at-val:`inertia`), or the compiler warns: unlike the unilateral joint limit, the mesh is
+   bilateral, and an overdamped mesh can transmit torque through a tooth flank that should have separated. This is an
+   alternative to the two-joint construction in :ref:`Backlash<CBacklash>`, trading the unilateral limit for one fewer
+   degree of freedom.
 
 .. _actuator-dcmotor-input:
 

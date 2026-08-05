@@ -1798,12 +1798,18 @@ a softer or a harder limit. The rotor state is integrated implicitly in the mesh
 stable; note that this local implicit treatment does not apply under the ``RK4`` integrator, which integrates the raw
 activation derivatives.
 
+Keep the mesh damping below critical, :math:`c < 2\sqrt{k J_r}`, or the model warns at compile time. Both forms model
+the engaged teeth as a compliant contact, but the joint limit above is *unilateral*: the solver clamps its force
+non-negative, so a separating flank transmits exactly nothing. The mesh spring-damper is bilateral, so past critical
+damping the damping term can outweigh the spring term and the teeth pull on a flank that should have separated. Within
+the physical range the effect is negligible, and inside the deadband no torque is transmitted either way.
+
 Choose this form over the two-joint model when the model is dominated by backlashed joints and would otherwise allocate
 no constraints: it removes a degree of freedom, a body and the joint-limit row, and it moves half of the state into
 activations, which finite-differenced derivatives nudge more cheaply than positions. In a model that already solves
-contacts the saving is much smaller, since most of it is the cost of entering the constraint solver at all. Note also
-that the two forms are not numerically equivalent -- the mesh is a spring-damper with an always-nonzero deflection,
-whereas the joint limit is a complementarity constraint.
+contacts the saving is much smaller, since most of it is the cost of entering the constraint solver at all. The two
+forms are not numerically equivalent: the mesh stiffness and damping are mechanical properties of the tooth pair, while
+:at:`solref` parameterizes the limit as a time constant and a damping ratio, so the two need separate calibration.
 
 .. _CRestitution:
 

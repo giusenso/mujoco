@@ -7378,6 +7378,17 @@ void mjCActuator::Compile(void) {
       throw mjCError(this, "backlash deadband backlash[1] cannot be negative, actuator '%s' "
                      "(id = %d)", name.c_str(), id);
     }
+
+    // The mesh spring-damper is bilateral, while real tooth flanks can only push. Beyond critical
+    // damping the damping term can outweigh the spring term, so an engaged flank transmits torque
+    // in the direction it should have separated in. Warn rather than throw: overdamping is a
+    // legitimate numerical choice, it is just not a physical mesh.
+    mjtNum c_crit = 2*mju_sqrt(biasprm[7]*dynprm[9]);
+    if (biasprm[8] > c_crit) {
+      model->AddWarning("backlash mesh damping backlash[3] exceeds critical damping "
+                        "2*sqrt(backlash[2]*backlash[0]); the mesh can transmit torque through a "
+                        "separating tooth flank", this);
+    }
   }
 
   // check muscle parameters
