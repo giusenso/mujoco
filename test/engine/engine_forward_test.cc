@@ -2963,12 +2963,14 @@ TEST_F(DCMotorBacklashTest, ComposesWithOtherStates) {
   EXPECT_GT(data->qvel[0], 0);
 }
 
-// in-actuator backlash should step faster than the two-joint reference, because it removes a
-// degree of freedom, a body and the joint-limit constraint. Only the structural savings are
-// asserted: wall clock varies with the machine (frequency scaling, hybrid core types, background
-// load), so a timing assertion here would be flaky. The measurement is interleaved and reduced to
-// a median anyway, because a single unrepeated sample is dominated by that noise and can invert the
-// ordering. Reported for information only.
+// in-actuator backlash should step faster than the two-joint reference, because it removes a degree
+// of freedom and a body, and because a violated deadband costs the reference a constraint row while
+// the mesh spring-damper stays invisible to the solver. These models coast without touching the
+// limit, so only the first two savings are exercised here; the margin is correspondingly small.
+// Only the structural savings are asserted: wall clock varies with the machine (frequency scaling,
+// hybrid core types, background load), so a timing assertion here would be flaky. The measurement is
+// interleaved and reduced to a median anyway, because a single unrepeated sample is dominated by
+// that noise and can invert the ordering. Reported for information only.
 TEST_F(DCMotorBacklashTest, CheaperThanReference) {
   char error[1024];
   MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
@@ -2980,7 +2982,9 @@ TEST_F(DCMotorBacklashTest, CheaperThanReference) {
   EXPECT_LT(backlash->nbody, reference->nbody);
   EXPECT_EQ(backlash->na, 2);  // the rotor lives here instead
 
-  // the reference loses the simple-body fast path that the single-joint model keeps
+  // the reference also loses the simple-body classification, which the single-joint model keeps.
+  // This is a structural difference, not a measurable cost at this size: at nv <= 2 the only
+  // reachable consumer is the CRB inner loop.
   EXPECT_EQ(backlash->body_simple[1], 1);
   EXPECT_EQ(reference->body_simple[1], 0);
 
