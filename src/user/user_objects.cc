@@ -7368,14 +7368,14 @@ void mjCActuator::Compile(void) {
   if (dyntype == mjDYN_DCMOTOR && dynprm[9] > 0) {
     if (armature != 0) {
       throw mjCError(this, "armature must be zero when backlash is enabled, actuator '%s' "
-                     "(id = %d): the rotor inertia is dynprm[9]", name.c_str(), id);
+                     "(id = %d): the rotor inertia is backlash[0]", name.c_str(), id);
     }
     if (biasprm[7] <= 0) {
-      throw mjCError(this, "backlash requires positive mesh stiffness biasprm[7], actuator '%s' "
+      throw mjCError(this, "backlash requires positive mesh stiffness backlash[2], actuator '%s' "
                      "(id = %d)", name.c_str(), id);
     }
     if (biasprm[6] < 0) {
-      throw mjCError(this, "backlash deadband biasprm[6] cannot be negative, actuator '%s' "
+      throw mjCError(this, "backlash deadband backlash[1] cannot be negative, actuator '%s' "
                      "(id = %d)", name.c_str(), id);
     }
   }

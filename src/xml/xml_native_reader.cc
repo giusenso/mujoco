@@ -1431,6 +1431,10 @@ void mjXReader::OneActuator(XMLElement* elem, mjsActuator* actuator) {
                        inherited ? actuator->biasprm[3] : 0,
                        inherited ? actuator->biasprm[4] : 0,
                        inherited ? actuator->biasprm[5] : 0};
+    double backlash[4] = {inherited ? actuator->dynprm[9] : 0,
+                          inherited ? actuator->biasprm[6] : 0,
+                          inherited ? actuator->biasprm[7] : 0,
+                          inherited ? actuator->biasprm[8] : 0};
     int input_mode = inherited ? (int)actuator->gainprm[8] : 0;
     ReadAttr(elem, "motorconst", 2, motorconst, text, false, false);
     ReadAttr(elem, "resistance", 1, &resistance, text);
@@ -1441,12 +1445,24 @@ void mjXReader::OneActuator(XMLElement* elem, mjsActuator* actuator) {
     ReadAttr(elem, "controller", 6, controller, text, false, false);
     ReadAttr(elem, "thermal", 6, thermal, text, false, false);
     ReadAttr(elem, "lugre", 5, lugre, text, false, false);
+    ReadAttr(elem, "backlash", 4, backlash, text, false, false);
     if (MapValue(elem, "input", &input_mode, dcmotorinput_map, dcmotorinput_sz)) {
       // successfully parsed
     }
     err = mjs_setToDCMotor(actuator, motorconst, resistance,
                            nominal, saturation, inductance,
                            cogging, controller, thermal, lugre, input_mode);
+
+    // backlash: {inertia, deadband, stiffness, damping}. Set here rather than in mjs_setToDCMotor
+    // because the two extra activations must be appended after that function has fixed actdim, and
+    // because its signature is mirrored in generated bindings.
+    if (err.empty() && backlash[0] > 0) {
+      actuator->dynprm[9]  = backlash[0];  // rotor inertia
+      actuator->biasprm[6] = backlash[1];  // deadband half-width
+      actuator->biasprm[7] = backlash[2];  // mesh stiffness
+      actuator->biasprm[8] = backlash[3];  // mesh damping
+      actuator->actdim += 2;               // rotor velocity + tooth deflection
+    }
   }
 
   else if (type == "plugin") {

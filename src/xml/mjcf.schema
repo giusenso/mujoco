@@ -1680,6 +1680,7 @@ element dcmotor : mjsActuator {
   controller         : double[1..6]
   thermal            : double[1..6]
   lugre              : double[1..5]
+  backlash           : double[1..4]
   input              : enum<dcmotorinput>
 }
 

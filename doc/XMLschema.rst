@@ -3312,6 +3312,9 @@
                :ref:`lugre<actuator-dcmotor-lugre>`
 
             .. grid-item::
+               :ref:`backlash<actuator-dcmotor-backlash>`
+
+            .. grid-item::
                :ref:`input<actuator-dcmotor-input>`
 
 
@@ -6685,6 +6688,9 @@
 
             .. grid-item::
                :ref:`lugre<default-dcmotor-lugre>`
+
+            .. grid-item::
+               :ref:`backlash<default-dcmotor-backlash>`
 
             .. grid-item::
                :ref:`input<default-dcmotor-input>`

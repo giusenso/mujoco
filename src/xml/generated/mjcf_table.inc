@@ -133,7 +133,8 @@ std::vector<const char*> MJCF[] = {
             "forcelimited", "forcerange", "gain"},
         {"dcmotor", "?", "group", "nsample", "interp", "delay", "ctrlrange", "user", "ctrllimited",
             "gear", "damping", "armature", "cranklength", "motorconst", "resistance", "nominal",
-            "saturation", "inductance", "cogging", "controller", "thermal", "lugre", "input"},
+            "saturation", "inductance", "cogging", "controller", "thermal", "lugre", "backlash",
+            "input"},
     {">"},
 
     {"extension", "*"},
@@ -356,7 +357,7 @@ std::vector<const char*> MJCF[] = {
             "user", "ctrllimited", "lengthrange", "gear", "damping", "armature", "cranklength",
             "joint", "jointinparent", "tendon", "slidersite", "cranksite", "site", "refsite",
             "motorconst", "resistance", "nominal", "saturation", "inductance", "cogging",
-            "controller", "thermal", "lugre", "input"},
+            "controller", "thermal", "lugre", "backlash", "input"},
         {"plugin", "*", "name", "class", "group", "nsample", "interp", "delay", "ctrlrange",
             "user", "plugin", "instance", "ctrllimited", "forcelimited", "actlimited",
             "forcerange", "actrange", "lengthrange", "gear", "damping", "armature", "cranklength",

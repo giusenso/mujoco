@@ -6944,6 +6944,18 @@ This element has the following custom attributes in addition to the common attri
    added to the standard actuator :ref:`damping<actuator-general-damping>` attribute.
    (see `tech note <_static/dcmotor.pdf>`__, Sections 1.4 and 2.4)
 
+.. _actuator-dcmotor-backlash:
+
+:at:`backlash`: :at-val:`real(4), "0 0 0 0"`
+   Gear backlash carried inside the actuator, defined as :at:`backlash` = ":at-val:`inertia` :at-val:`deadband`
+   :at-val:`stiffness` :at-val:`damping`" (kg·m², rad, N·m/rad, N·m·s/rad), all in the actuator's output coordinates.
+   Disabled when :at-val:`inertia` = 0 (the default). When positive it adds two activation variables, the rotor velocity
+   and the tooth deflection relative to the load, and :at:`armature` must then be zero because the rotor inertia is
+   carried here instead of in the mass matrix. :at-val:`deadband` is the half-width of the gap: within it the
+   transmission is disconnected and the load receives no torque, outside it the load is driven through a spring-damper
+   of the given :at-val:`stiffness` and :at-val:`damping`. This is an alternative to the two-joint construction in
+   :ref:`Backlash<CBacklash>`, trading an exact complementarity limit for one fewer degree of freedom.
+
 .. _actuator-dcmotor-input:
 
 :at:`input`: :at-val:`[voltage, position, velocity], "voltage"`
@@ -10674,6 +10686,8 @@ All :ref:`adhesion <actuator-adhesion>` attributes are available here except: na
 .. _default-dcmotor-thermal:
 
 .. _default-dcmotor-lugre:
+
+.. _default-dcmotor-backlash:
 
 :el-prefix:`default/` |-| **dcmotor** |?|
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1785,23 +1785,25 @@ disconnected: the load receives no torque and the motor torque accelerates the r
 which is the regime the two-joint model approximates. Because the rotor is no longer rigidly locked to the joint, its
 inertia belongs to the actuator rather than to the mass matrix, and :at:`armature` must be zero.
 
-There is no shortcut attribute for this yet, so the parameters are set on the underlying :el:`general` element:
-:ref:`dynprm<actuator-general-dynprm>`\[9\] is the rotor inertia (positive values enable backlash), and
-:ref:`biasprm<actuator-general-biasprm>`\[6:9\] are the deadband half-width, the mesh stiffness and the mesh damping,
-all in the actuator's output coordinates:
+The parameters are given by the :ref:`backlash<actuator-dcmotor-backlash>` attribute, as the rotor inertia, the deadband
+half-width, the mesh stiffness and the mesh damping, all in the actuator's output coordinates. A positive inertia enables
+backlash and allocates the two activations:
 
 .. code-block:: xml
 
-   <general joint="J1" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
-            actearly="true" actdim="2"
-            dynprm="0 0 0 0 0 0 0 0 0 0.01"
-            gainprm="1 1"
-            biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+   <dcmotor joint="J1" motorconst="1" resistance="1" backlash="0.01 0.05 1e4 2"/>
 
 The mesh stiffness plays the role that :at:`solref` plays for the joint limit above, making the backlash rotation end at
 a softer or a harder limit. The rotor state is integrated implicitly in the mesh spring-damper, so stiff meshes remain
 stable; note that this local implicit treatment does not apply under the ``RK4`` integrator, which integrates the raw
 activation derivatives.
+
+Choose this form over the two-joint model when the model is dominated by backlashed joints and would otherwise allocate
+no constraints: it removes a degree of freedom, a body and the joint-limit row, and it moves half of the state into
+activations, which finite-differenced derivatives nudge more cheaply than positions. In a model that already solves
+contacts the saving is much smaller, since most of it is the cost of entering the constraint solver at all. Note also
+that the two forms are not numerically equivalent -- the mesh is a spring-damper with an always-nonzero deflection,
+whereas the joint limit is a complementarity constraint.
 
 .. _CRestitution:
 
