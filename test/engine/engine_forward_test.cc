@@ -2530,16 +2530,14 @@ static constexpr char kBacklashXml[] = R"(
     </body>
   </worldbody>
   <actuator>
-    <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
-             actearly="true" actdim="2"
-             dynprm="0 0 0 0 0 0 0 0 0 0.01"
-             gainprm="1 1"
-             biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+    <dcmotor joint="load" motorconst="1" resistance="1" backlash="0.01 0.05 1e4 2"/>
   </actuator>
 </mujoco>
 )";
 
-// the equivalent two-joint reference: same rotor inertia, load, gap and motor
+// the equivalent two-joint reference: same rotor inertia, load, gap and motor. Both hinges sit on
+// one body, as doc/modeling.rst prescribes; carrying the rotor hinge on a separate near-massless
+// body is physically equivalent but costs an extra body, which would flatter the comparison.
 static constexpr char kReferenceXml[] = R"(
 <mujoco>
   <compiler angle="radian"/>
@@ -2547,12 +2545,9 @@ static constexpr char kReferenceXml[] = R"(
   <worldbody>
     <body>
       <joint name="rotor" type="hinge" axis="0 0 1" armature="0.01"/>
-      <inertial pos="0 0 0" mass="1e-6" diaginertia="1e-9 1e-9 1e-9"/>
-      <body>
-        <joint name="gap" type="hinge" axis="0 0 1" limited="true"
-               range="-0.05 0.05" solreflimit="0.002 1"/>
-        <geom type="cylinder" size="0.1 0.1" mass="1"/>
-      </body>
+      <joint name="gap" type="hinge" axis="0 0 1" limited="true"
+             range="-0.05 0.05" solreflimit="0.002 1"/>
+      <geom type="cylinder" size="0.1 0.1" mass="1"/>
     </body>
   </worldbody>
   <actuator>
@@ -2901,6 +2896,175 @@ TEST_F(DCMotorBacklashTest, ArmatureWithBacklashIsRejected) {
   EXPECT_THAT(error, HasSubstr("armature must be zero when backlash is enabled"));
 }
 
+// the backlash shortcut attribute must be exactly the raw parameter-slot form: same slots, same
+// activation count, same trajectory. kBacklashXml above uses the shortcut, so this pins the mapping
+// that all the other tests in this fixture depend on.
+TEST_F(DCMotorBacklashTest, ShortcutMatchesRawParameters) {
+  static constexpr char raw[] = R"(
+  <mujoco>
+    <option timestep="0.002" integrator="implicitfast"/>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <general joint="load" dyntype="dcmotor" gaintype="dcmotor" biastype="dcmotor"
+               actearly="true" actdim="2"
+               dynprm="0 0 0 0 0 0 0 0 0 0.01"
+               gainprm="1 1"
+               biasprm="0 0 0 0 0 0 0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr shortcut = LoadModelFromString(kBacklashXml, error, sizeof(error));
+  ASSERT_THAT(shortcut.get(), NotNull()) << error;
+  MjModelPtr explicit_prm = LoadModelFromString(raw, error, sizeof(error));
+  ASSERT_THAT(explicit_prm.get(), NotNull()) << error;
+
+  EXPECT_EQ(shortcut->na, explicit_prm->na);
+  EXPECT_EQ(shortcut->actuator_actnum[0], explicit_prm->actuator_actnum[0]);
+  EXPECT_EQ(shortcut->actuator_dynprm[9], explicit_prm->actuator_dynprm[9]);
+  for (int i = 6; i < 9; i++) {
+    EXPECT_EQ(shortcut->actuator_biasprm[i], explicit_prm->actuator_biasprm[i]) << "biasprm[" << i << "]";
+  }
+
+  // and the two must integrate identically, not merely compile to the same numbers
+  MjDataPtr data_shortcut = MakeData(shortcut);
+  MjDataPtr data_explicit = MakeData(explicit_prm);
+  data_shortcut->ctrl[0] = 1;
+  data_explicit->ctrl[0] = 1;
+  for (int i = 0; i < 500; i++) {
+    mj_step(shortcut.get(), data_shortcut.get());
+    mj_step(explicit_prm.get(), data_explicit.get());
+    EXPECT_EQ(data_shortcut->qpos[0], data_explicit->qpos[0]);
+    EXPECT_EQ(data_shortcut->act[0], data_explicit->act[0]);
+    EXPECT_EQ(data_shortcut->act[1], data_explicit->act[1]);
+  }
+}
+
+// the shortcut must reject the same mistakes as the raw form, with the attribute-level naming
+TEST_F(DCMotorBacklashTest, ShortcutRejectsBadParameters) {
+  static constexpr char armature_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1" armature="0.01"
+               backlash="0.01 0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  // inertia given but stiffness omitted: the trailing sub-values default to zero
+  static constexpr char partial_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1" backlash="0.01"/>
+    </actuator>
+  </mujoco>
+  )";
+  static constexpr char negative_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1" backlash="0.01 -0.05 1e4 2"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  EXPECT_THAT(LoadModelFromString(armature_xml, error, sizeof(error)).get(), IsNull());
+  EXPECT_THAT(error, HasSubstr("armature must be zero when backlash is enabled"));
+  EXPECT_THAT(LoadModelFromString(partial_xml, error, sizeof(error)).get(), IsNull());
+  EXPECT_THAT(error, HasSubstr("mesh stiffness"));
+  EXPECT_THAT(LoadModelFromString(negative_xml, error, sizeof(error)).get(), IsNull());
+  EXPECT_THAT(error, HasSubstr("deadband"));
+}
+
+// backlash must be inheritable from a default class and overridable per actuator, which is the
+// reason the reader seeds it from the existing parameter slots before reading the attribute
+TEST_F(DCMotorBacklashTest, ShortcutInheritsFromDefault) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <default>
+      <dcmotor motorconst="1" resistance="1" backlash="0.01 0.05 1e4 2"/>
+    </default>
+    <worldbody>
+      <body>
+        <joint name="a" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+      <body pos="1 0 0">
+        <joint name="b" type="hinge" axis="0 0 1"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="a"/>
+      <dcmotor joint="b" backlash="0.02 0.1 2e4 3"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+
+  EXPECT_EQ(model->na, 4);  // two activations each
+  EXPECT_EQ(model->actuator_actnum[0], 2);
+  EXPECT_EQ(model->actuator_actnum[1], 2);
+
+  // inherited from the default class
+  EXPECT_EQ(model->actuator_dynprm[9], 0.01);
+  EXPECT_EQ(model->actuator_biasprm[6], 0.05);
+  EXPECT_EQ(model->actuator_biasprm[7], 1e4);
+  EXPECT_EQ(model->actuator_biasprm[8], 2);
+
+  // overridden on the second actuator
+  EXPECT_EQ(model->actuator_dynprm[mjNDYN + 9], 0.02);
+  EXPECT_EQ(model->actuator_biasprm[mjNBIAS + 6], 0.1);
+  EXPECT_EQ(model->actuator_biasprm[mjNBIAS + 7], 2e4);
+  EXPECT_EQ(model->actuator_biasprm[mjNBIAS + 8], 3);
+}
+
+// omitting the attribute must leave the actuator entirely unaffected: no activations, no gating
+TEST_F(DCMotorBacklashTest, ShortcutAbsentLeavesNoTrace) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="load" type="hinge" axis="0 0 1" armature="0.01"/>
+        <geom type="cylinder" size="0.1 0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="load" motorconst="1" resistance="1"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  EXPECT_EQ(model->na, 0);
+  EXPECT_EQ(model->actuator_dynprm[9], 0);
+  EXPECT_EQ(model->actuator_biasprm[7], 0);
+}
+
 // a mesh with no stiffness would transmit nothing at all
 TEST_F(DCMotorBacklashTest, ZeroMeshStiffnessIsRejected) {
   static constexpr char xml[] = R"(
@@ -2964,9 +3128,9 @@ TEST_F(DCMotorBacklashTest, ComposesWithOtherStates) {
 }
 
 // in-actuator backlash should step faster than the two-joint reference, because it removes a degree
-// of freedom and a body, and because a violated deadband costs the reference a constraint row while
-// the mesh spring-damper stays invisible to the solver. These models coast without touching the
-// limit, so only the first two savings are exercised here; the margin is correspondingly small.
+// of freedom, and because a violated deadband costs the reference a constraint row while the mesh
+// spring-damper stays invisible to the solver. These models coast without touching the limit, so
+// only the first saving is exercised here; the margin is correspondingly small.
 // Only the structural savings are asserted: wall clock varies with the machine (frequency scaling,
 // hybrid core types, background load), so a timing assertion here would be flaky. The measurement is
 // interleaved and reduced to a median anyway, because a single unrepeated sample is dominated by
@@ -2979,7 +3143,7 @@ TEST_F(DCMotorBacklashTest, CheaperThanReference) {
   ASSERT_THAT(reference.get(), NotNull()) << error;
 
   EXPECT_LT(backlash->nv, reference->nv);
-  EXPECT_LT(backlash->nbody, reference->nbody);
+  EXPECT_EQ(backlash->nbody, reference->nbody);  // same body count: the DOF is the only difference
   EXPECT_EQ(backlash->na, 2);  // the rotor lives here instead
 
   // the reference also loses the simple-body classification, which the single-joint model keeps.
