@@ -16,6 +16,7 @@
 
 #include "src/engine/engine_forward.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -2963,8 +2964,11 @@ TEST_F(DCMotorBacklashTest, ComposesWithOtherStates) {
 }
 
 // in-actuator backlash should step faster than the two-joint reference, because it removes a
-// degree of freedom, a body and the joint-limit constraint. Timing is machine dependent, so this
-// asserts the structural savings and only reports the wall clock.
+// degree of freedom, a body and the joint-limit constraint. Only the structural savings are
+// asserted: wall clock varies with the machine (frequency scaling, hybrid core types, background
+// load), so a timing assertion here would be flaky. The measurement is interleaved and reduced to
+// a median anyway, because a single unrepeated sample is dominated by that noise and can invert the
+// ordering. Reported for information only.
 TEST_F(DCMotorBacklashTest, CheaperThanReference) {
   char error[1024];
   MjModelPtr backlash = LoadModelFromString(kBacklashXml, error, sizeof(error));
@@ -2974,12 +2978,14 @@ TEST_F(DCMotorBacklashTest, CheaperThanReference) {
 
   EXPECT_LT(backlash->nv, reference->nv);
   EXPECT_LT(backlash->nbody, reference->nbody);
+  EXPECT_EQ(backlash->na, 2);  // the rotor lives here instead
 
   // the reference loses the simple-body fast path that the single-joint model keeps
   EXPECT_EQ(backlash->body_simple[1], 1);
   EXPECT_EQ(reference->body_simple[1], 0);
 
-  static constexpr int kNumSteps = 20000;
+  static constexpr int kNumSteps = 3000;
+  static constexpr int kNumReps = 7;
   auto run = [](const MjModelPtr& model) {
     MjDataPtr data = MakeData(model);
     data->ctrl[0] = 1;
@@ -2990,11 +2996,23 @@ TEST_F(DCMotorBacklashTest, CheaperThanReference) {
     return std::chrono::duration<double, std::micro>(elapsed).count() / kNumSteps;
   };
 
-  double backlash_us = run(backlash);
-  double reference_us = run(reference);
-  std::cerr << "backlash  " << backlash_us << " us/step (nv=" << backlash->nv << ")\n"
-            << "reference " << reference_us << " us/step (nv=" << reference->nv << ")\n"
-            << "speedup   " << reference_us / backlash_us << "x\n";
+  // interleave the two models so any drift in clock speed hits both alike
+  std::vector<double> backlash_us, reference_us;
+  run(backlash);
+  run(reference);  // discard, cold caches
+  for (int rep = 0; rep < kNumReps; rep++) {
+    backlash_us.push_back(run(backlash));
+    reference_us.push_back(run(reference));
+  }
+  auto median = [](std::vector<double> v) {
+    std::sort(v.begin(), v.end());
+    return v[v.size() / 2];
+  };
+  double backlash_med = median(backlash_us);
+  double reference_med = median(reference_us);
+  std::cerr << "backlash  " << backlash_med << " us/step (nv=" << backlash->nv << ")\n"
+            << "reference " << reference_med << " us/step (nv=" << reference->nv << ")\n"
+            << "speedup   " << reference_med / backlash_med << "x (median of " << kNumReps << ")\n";
 }
 
 // ----------------------- filterexact actuators -------------------------------
