@@ -1494,6 +1494,25 @@ const mjtNum RK4_B[4] = {
 };
 
 
+// copy discrete slew-state values between activation-sized arrays
+static void copySlewValues(const mjModel* m, mjtNum* dst, const mjtNum* src) {
+  for (int i=0; i < m->nactuator; i++) {
+    int slot = -1;
+    const mjtNum* dynprm = m->actuator_dynprm + mjNDYN*i;
+    if (m->actuator_dyntype[i] == mjDYN_PID && dynprm[1] > 0) {
+      slot = 0;
+    } else if (m->actuator_dyntype[i] == mjDYN_DCMOTOR) {
+      slot = mj_dcmotorSlots(dynprm, m->actuator_gainprm + mjNGAIN*i).slew;
+    }
+
+    if (slot >= 0) {
+      int adr = m->actuator_actadr[i] + slot;
+      dst[adr] = src[adr];
+    }
+  }
+}
+
+
 // Runge Kutta explicit order-N integrator
 //  (A,B) is the tableau, C is set to row_sum(A)
 void mj_RungeKutta(const mjModel* m, mjData* d, int N) {
@@ -1551,6 +1570,9 @@ void mj_RungeKutta(const mjModel* m, mjData* d, int N) {
     mj_integratePos(m, X[i], dX, h);
     mju_addToScl(X[i]+nq, dX+nv, h, nv+na);
 
+    // slew states hold the previous per-step setpoint, not an RK stage state
+    copySlewValues(m, X[i]+nq+nv, X[0]+nq+nv);
+
     // set X[i], T[i-1] in mjData
     mju_copy(d->qpos, X[i], nq);
     mju_copy(d->qvel, X[i]+nq, nv);
@@ -1573,6 +1595,9 @@ void mj_RungeKutta(const mjModel* m, mjData* d, int N) {
     mju_addToScl(dX, X[j]+nq, B[j], nv);
     mju_addToScl(dX+nv, F[j], B[j], nv+na);
   }
+
+  // apply the single projected slew update computed at the start of the step
+  copySlewValues(m, dX+2*nv, F[0]+nv);
 
   // reset state and time
   d->time = time;
