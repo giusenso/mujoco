@@ -795,6 +795,44 @@ TEST_F(MujocoTest, RecompileFails) {
   mj_deleteSpec(spec);
 }
 
+TEST_F(MujocoTest, RecompilePreservesVariableWidthControls) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="joint"/>
+        <geom size="0.1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="joint" kp="1" input="pos vel ff"/>
+      <dcmotor joint="joint" motorconst="1" resistance="1" input="none"/>
+      <motor joint="joint"/>
+    </actuator>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjSpec* spec = mj_parseXMLString(xml, nullptr, error.data(), error.size());
+  ASSERT_THAT(spec, NotNull()) << error.data();
+  mjModel* model = mj_compile(spec, nullptr);
+  ASSERT_THAT(model, NotNull()) << mjs_getError(spec);
+  mjData* data = mj_makeData(model);
+  ASSERT_THAT(data, NotNull());
+  ASSERT_EQ(model->nu, 4);
+
+  const mjtNum expected[] = {1, 2, 3, 4};
+  mju_copy(data->ctrl, expected, 4);
+  ASSERT_EQ(mj_recompile(spec, nullptr, model, data), 0) << mjs_getError(spec);
+  ASSERT_EQ(model->nu, 4);
+  for (int i = 0; i < model->nu; i++) {
+    EXPECT_EQ(data->ctrl[i], expected[i]) << "control " << i;
+  }
+
+  mj_deleteData(data);
+  mj_deleteModel(model);
+  mj_deleteSpec(spec);
+}
+
 TEST_F(MujocoTest, ModifyShellInertiaFails) {
   static constexpr char xml[] = R"(
   <mujoco>
@@ -2521,6 +2559,52 @@ TEST_F(MujocoTest, AttachMocap) {
 
   mj_deleteSpec(spec);
   mj_deleteModel(model);
+}
+
+TEST_F(MujocoTest, AttachPreservesVariableWidthKeyframeControls) {
+  static constexpr char child_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body name="child">
+        <joint name="joint"/>
+        <geom size="0.1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="joint" kp="1" input="pos vel ff"/>
+      <dcmotor joint="joint" motorconst="1" resistance="1" input="none"/>
+      <motor joint="joint"/>
+    </actuator>
+    <keyframe>
+      <key name="key" ctrl="1 2 3 4"/>
+    </keyframe>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  mjSpec* child = mj_parseXMLString(child_xml, nullptr, error.data(), error.size());
+  ASSERT_THAT(child, NotNull()) << error.data();
+  mjModel* child_model = mj_compile(child, nullptr);
+  ASSERT_THAT(child_model, NotNull()) << mjs_getError(child);
+
+  mjSpec* parent = mj_makeSpec();
+  mjsFrame* frame = mjs_addFrame(mjs_findBody(parent, "world"), nullptr);
+  ASSERT_THAT(mjs_attach(frame->element, mjs_findBody(child, "child")->element,
+                         "child-", ""),
+              NotNull());
+
+  mjModel* model = mj_compile(parent, nullptr);
+  ASSERT_THAT(model, NotNull()) << mjs_getError(parent);
+  ASSERT_EQ(model->nkey, 1);
+  ASSERT_EQ(model->nu, 4);
+  const mjtNum expected[] = {1, 2, 3, 4};
+  for (int i = 0; i < model->nu; i++) {
+    EXPECT_EQ(model->key_ctrl[i], expected[i]) << "control " << i;
+  }
+
+  mj_deleteModel(model);
+  mj_deleteSpec(parent);
+  mj_deleteModel(child_model);
+  mj_deleteSpec(child);
 }
 
 TEST_F(MujocoTest, ReplicateKeyframe) {
