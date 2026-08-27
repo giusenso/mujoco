@@ -1613,6 +1613,42 @@ TEST_F(CoreSmoothTest, PidIntegralAction) {
   mj_deleteData(data);
 }
 
+TEST_F(CoreSmoothTest, PidIntegralStateDoesNotOvershootLimit) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="0.1">
+      <flag gravity="disable"/>
+    </option>
+    <worldbody>
+      <body>
+        <joint name="slide" type="slide"/>
+        <geom size="0.1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="slide" kp="0" ki="1" imax="1" input="pos"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  ASSERT_EQ(model->na, 1);
+  MjDataPtr data = MakeData(model);
+
+  const mjtIntegrator integrators[] = {mjINT_EULER, mjINT_RK4};
+  for (mjtIntegrator integrator : integrators) {
+    model->opt.integrator = integrator;
+    for (mjtNum direction : {-1.0, 1.0}) {
+      mj_resetData(model.get(), data.get());
+      data->ctrl[0] = direction * 100;
+      mj_step(model.get(), data.get());
+      EXPECT_EQ(data->act[0], direction)
+          << "integrator " << integrator << ", direction " << direction;
+    }
+  }
+}
+
 // slewmax limits the effective setpoint rate through an activation state.
 TEST_F(CoreSmoothTest, PidSlewRateLimit) {
   static constexpr char xml[] = R"(
