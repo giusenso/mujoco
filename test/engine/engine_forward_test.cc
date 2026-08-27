@@ -1926,6 +1926,49 @@ TEST_F(DCMotorTest, NoInputsCompileErrors) {
   EXPECT_THAT(error, HasSubstr("pos input"));
 }
 
+TEST_F(DCMotorTest, SlewStateIsIntegratorIndependent) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <option timestep="1">
+      <flag gravity="disable"/>
+    </option>
+    <worldbody>
+      <body>
+        <joint name="joint" type="slide"/>
+        <geom size="0.1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="joint" kp="0" slewmax="1" input="pos"/>
+      <dcmotor joint="joint" motorconst="1" resistance="1" input="pos"
+               controller="0 0 0 1 0 0"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  ASSERT_EQ(model->na, 2);
+  MjDataPtr data = MakeData(model);
+
+  const mjtIntegrator integrators[] = {
+      mjINT_EULER, mjINT_RK4, mjINT_IMPLICIT, mjINT_IMPLICITFAST};
+  const mjtNum targets[] = {0.5, 2, 2, -0.25};
+  const mjtNum expected[] = {0.5, 1.5, 2, 1};
+  for (mjtIntegrator integrator : integrators) {
+    model->opt.integrator = integrator;
+    mj_resetData(model.get(), data.get());
+    for (int step = 0; step < 4; step++) {
+      data->ctrl[0] = data->ctrl[1] = targets[step];
+      mj_step(model.get(), data.get());
+      EXPECT_EQ(data->act[0], expected[step])
+          << "PID, integrator " << integrator << ", step " << step;
+      EXPECT_EQ(data->act[1], expected[step])
+          << "DC motor, integrator " << integrator << ", step " << step;
+    }
+  }
+}
+
 TEST_F(DCMotorTest, ThermalRiseAndFall) {
   static constexpr char xml[] = R"(
   <mujoco>
