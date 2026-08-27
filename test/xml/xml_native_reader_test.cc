@@ -3822,6 +3822,62 @@ TEST_F(ActuatorParseTest, ActuatorDelayRequiresHistory) {
               HasSubstr("setting delay > 0 without a history buffer"));
 }
 
+TEST_F(ActuatorParseTest, ActuatorHistoryRequiresScalarInput) {
+  static constexpr char pid_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom size="1"/>
+        <joint name="jnt"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="jnt" kp="1" input="pos ff" delay="1" nsample="2"/>
+    </actuator>
+  </mujoco>
+  )";
+  std::array<char, 1024> error;
+  MjModelPtr model = LoadModelFromString(pid_xml, error.data(), error.size());
+  ASSERT_THAT(model.get(), IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("history and delay require exactly one input"));
+
+  static constexpr char dcmotor_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom size="1"/>
+        <joint name="jnt"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="jnt" motorconst="1" resistance="1"
+               input="pos vel" controller="1 0 1" nsample="2"/>
+    </actuator>
+  </mujoco>
+  )";
+  model = LoadModelFromString(dcmotor_xml, error.data(), error.size());
+  ASSERT_THAT(model.get(), IsNull());
+  EXPECT_THAT(error.data(), HasSubstr("history and delay require exactly one input"));
+
+  static constexpr char scalar_xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <geom size="1"/>
+        <joint name="jnt"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <pid joint="jnt" kp="1" input="pos" delay="1" nsample="2"/>
+    </actuator>
+  </mujoco>
+  )";
+  model = LoadModelFromString(scalar_xml, error.data(), error.size());
+  ASSERT_THAT(model.get(), NotNull()) << error.data();
+  EXPECT_EQ(model->actuator_ctrlnum[0], 1);
+  EXPECT_EQ(model->actuator_history[0], 2);
+}
+
 TEST_F(ActuatorParseTest, DampingArmatureDefaultsPropagate) {
   static constexpr char xml[] = R"(
   <mujoco>
