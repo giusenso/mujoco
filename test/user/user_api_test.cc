@@ -548,6 +548,33 @@ TEST_F(MujocoTest, SetToPID) {
   mj_deleteSpec(spec);
 }
 
+TEST_F(MujocoTest, SetToPIDIntegralAndSlewCompiles) {
+  mjSpec* spec = mj_makeSpec();
+  mjsBody* body = mjs_addBody(mjs_findBody(spec, "world"), nullptr);
+  mjsJoint* joint = mjs_addJoint(body, nullptr);
+  mjsGeom* geom = mjs_addGeom(body, nullptr);
+  mjs_setName(joint->element, "joint");
+  geom->size[0] = 1;
+
+  mjsActuator* actuator = mjs_addActuator(spec, nullptr);
+  mjs_setString(actuator->target, "joint");
+  actuator->trntype = mjTRN_JOINT;
+  double ki = 1;
+  double imax = 2;
+  double slewmax = 3;
+  ASSERT_STREQ(mjs_setToPID(actuator, 4, nullptr, nullptr, &ki, &imax, &slewmax,
+                           0, mjINPUT_POS),
+               "");
+
+  mjModel* model = mj_compile(spec, nullptr);
+  ASSERT_THAT(model, NotNull()) << mjs_getError(spec);
+  EXPECT_EQ(model->actuator_dyntype[0], mjDYN_PID);
+  EXPECT_EQ(model->actuator_actnum[0], 2);
+
+  mj_deleteModel(model);
+  mj_deleteSpec(spec);
+}
+
 static constexpr char xml_plugin_1[] = R"(
   <mujoco model="MuJoCo Model">
     <worldbody>
