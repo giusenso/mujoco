@@ -72,11 +72,17 @@ Actuation
       gains changed from voltage space to torque space. The old velocity mode's integral term (integrated-velocity
       tracking) is retired without replacement; the integrator always accumulates position error.
 
-      **Migration:** Voltage-commanded motors (the default) are unchanged. Replace ``input="position"`` with
-      ``input="pos"`` and ``input="velocity"`` with ``input="vel"``, and multiply the controller gains by
-      :math:`K/R` (torque per volt). The motor's back-EMF damping, previously felt in addition to the controller's
-      damping, is now compensated: to preserve behavior when the velocity setpoint is zero, add :math:`K^2/R` to the
-      converted :at-val:`kd`.
+      **Migration:** Voltage-commanded motors (the default) are unchanged. For the old position mode, use
+      ``input="pos"``, set :math:`k_{p,new}=(K/R)k_{p,old}`, :math:`k_{i,new}=(K/R)k_{i,old}`, and
+      :math:`k_{d,new}=(K/R)k_{d,old}+K^2/R`.
+
+      The old velocity mode has no direct ``input="vel"`` replacement because its integral gain acted on an integrated
+      velocity command. For a stateless motor with fixed resistance and inactive limits, externally integrate the
+      velocity command as :math:`u_{pos}(t)=u_{pos}(0)+\int_0^t u_{vel}(s)\,ds`, use ``input="pos vel"``, set
+      :math:`k_{p,new}=(K/R)k_{i,old}`, :math:`k_{i,new}=0`, and
+      :math:`k_{d,new}=(K/R)k_{p,old}`. Increase the actuator's linear :at:`damping` by :math:`K^2/R` to restore the
+      uncompensated back-EMF damping. Models with electrical or thermal dynamics or active limits require a
+      case-specific controller migration.
 
 Engine
 ^^^^^^
