@@ -4071,7 +4071,13 @@ void mjCModel::SaveState(const std::string& state_name,
       actuator->act(state_name).assign(actuator->actdim_, 0);
       mjuu_copyvec(actuator->act(state_name).data(), act + actuator->actadr_, actuator->actdim_);
     }
-    if (ctrl) { actuator->ctrl(state_name) = ctrl[i]; }
+    if (ctrl) {
+      std::vector<mjtNum>& saved_ctrl = actuator->ctrl(state_name);
+      saved_ctrl.clear();
+      for (int j = 0; j < actuator->ctrlnum_; j++) {
+        saved_ctrl.push_back(ctrl[actuator->ctrladr_ + j]);
+      }
+    }
   }
 
   for (auto body : bodies_) {
@@ -4124,8 +4130,15 @@ void mjCModel::RestoreState(const std::string& state_name,
     if (!actuator->act(state_name).empty() && mjuu_defined(actuator->act(state_name)[0]) && act) {
       mjuu_copyvec(act + actuator->actadr_, actuator->act(state_name).data(), actuator->actdim_);
     }
-    if (ctrl) {
-      ctrl[i] = mjuu_defined(actuator->ctrl(state_name)) ? actuator->ctrl(state_name) : 0;
+    if (ctrl && actuator->ctrlnum_ > 0) {
+      const std::vector<mjtNum>& saved_ctrl = actuator->ctrl(state_name);
+      int ncopy = std::min<int>(saved_ctrl.size(), actuator->ctrlnum_);
+      for (int j = 0; j < ncopy; j++) {
+        ctrl[actuator->ctrladr_ + j] = mjuu_defined(saved_ctrl[j]) ? saved_ctrl[j] : 0;
+      }
+      for (int j = ncopy; j < actuator->ctrlnum_; j++) {
+        ctrl[actuator->ctrladr_ + j] = 0;
+      }
     }
   }
 

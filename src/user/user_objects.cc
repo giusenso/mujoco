@@ -6622,8 +6622,8 @@ std::vector<mjtNum>& mjCActuator::act(const std::string& state_name) {
 }
 
 
-mjtNum& mjCActuator::ctrl(const std::string& state_name) {
-  if (ctrl_.find(state_name) == ctrl_.end()) { ctrl_[state_name] = mjNAN; }
+std::vector<mjtNum>& mjCActuator::ctrl(const std::string& state_name) {
+  if (ctrl_.find(state_name) == ctrl_.end()) { ctrl_[state_name] = {}; }
   return ctrl_.at(state_name);
 }
 

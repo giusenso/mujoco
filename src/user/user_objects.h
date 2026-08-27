@@ -1818,7 +1818,7 @@ class mjCActuator_ : public mjCBase {
   double  ctrlranges_[4][2];                         // resolved per-input control ranges
   mjtByte ctrllimiteds_[4];                          // resolved per-input limited flags
   std::map<std::string, std::vector<mjtNum>> act_;   // act at the previous step
-  std::map<std::string, mjtNum>              ctrl_;  // ctrl at the previous step
+  std::map<std::string, std::vector<mjtNum>> ctrl_;  // ctrl at the previous step
 
   // variable-size data
   std::string         plugin_name;
@@ -1858,7 +1858,7 @@ class mjCActuator : public mjCActuator_, private mjsActuator {
   bool is_actlimited() const;
 
   std::vector<mjtNum>& act(const std::string& state_name);
-  mjtNum&              ctrl(const std::string& state_name);
+  std::vector<mjtNum>& ctrl(const std::string& state_name);
 
  private:
   void Compile(void);  // compiler
