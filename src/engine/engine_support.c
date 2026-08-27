@@ -761,6 +761,19 @@ mjtNum mj_nextActivation(const mjModel* m, const mjData* d,
     }
   }
 
+  // PID integral state: Euler integration with anti-windup clamp
+  else if (dyntype == mjDYN_PID) {
+    act = act + act_dot * m->opt.timestep;
+    int offset = act_adr - m->actuator_actadr[actuator_id];
+    int integral = m->actuator_gainprm[actuator_id*mjNGAIN] > 0;
+    if (integral && offset == m->actuator_actnum[actuator_id] - 1) {
+      mjtNum imax = m->actuator_dynprm[actuator_id*mjNDYN];
+      if (imax > 0) {
+        act = mju_clip(act, -imax, imax);
+      }
+    }
+  }
+
   // otherwise Euler integration
   else {
     act = act + act_dot * m->opt.timestep;
