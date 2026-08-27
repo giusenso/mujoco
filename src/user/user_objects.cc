@@ -7183,9 +7183,9 @@ void mjCActuator::Compile(void) {
   if (delay > 0 && nsample <= 0) {
     throw mjCError(this, "setting delay > 0 without a history buffer");
   }
-  if ((delay > 0 || nsample > 0) && ctrlnum_ == 0) {
+  if ((delay > 0 || nsample > 0) && ctrlnum_ != 1) {
     throw mjCError(this,
-                   "history and delay require an input in actuator '%s' (id = %d)",
+                   "history and delay require exactly one input in actuator '%s' (id = %d)",
                    name.c_str(),
                    id);
   }
