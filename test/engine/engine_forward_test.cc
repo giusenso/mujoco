@@ -1506,6 +1506,51 @@ TEST_F(DCMotorTest, SetpointMatchesPid) {
                 MjTol(1e-13, 1e-5));
   }
 }
+
+TEST_F(DCMotorTest, VelocityModeMigration) {
+  static constexpr char xml[] = R"(
+  <mujoco>
+    <worldbody>
+      <body>
+        <joint name="joint" type="slide"/>
+        <geom size="0.1" mass="1"/>
+      </body>
+    </worldbody>
+    <actuator>
+      <dcmotor joint="joint" motorconst="1" resistance="2" input="pos vel"
+               controller="2 0 3" damping="0.75"/>
+    </actuator>
+  </mujoco>
+  )";
+  char error[1024];
+  MjModelPtr model = LoadModelFromString(xml, error, sizeof(error));
+  ASSERT_THAT(model.get(), NotNull()) << error;
+  MjDataPtr data = MakeData(model);
+
+  // Old voltage-space gains kp=6 and ki=4 map to new torque-space kp=2 and kd=3.
+  // The old linear damping 0.25 is increased by K^2/R=0.5.
+  constexpr mjtNum velocity_command[] = {1.0, -0.5, 0.75};
+  constexpr mjtNum position[] = {0.2, -0.1, 0.4};
+  constexpr mjtNum velocity[] = {-0.3, 0.6, -0.2};
+  mjtNum integrated_command = -0.4;
+
+  for (int i = 0; i < 3; i++) {
+    data->qpos[0] = position[i];
+    data->qvel[0] = velocity[i];
+    data->ctrl[0] = integrated_command;
+    data->ctrl[1] = velocity_command[i];
+    mj_forward(model.get(), data.get());
+
+    mjtNum old_voltage = 6*(velocity_command[i] - velocity[i]) +
+                         4*(integrated_command - position[i]);
+    mjtNum old_force = 0.5*(old_voltage - velocity[i]) - 0.25*velocity[i];
+    EXPECT_NEAR(data->qfrc_actuator[0] + data->qfrc_passive[0], old_force,
+                MjTol(1e-12, 1e-5));
+
+    integrated_command += model->opt.timestep * velocity_command[i];
+  }
+}
+
 TEST_F(DCMotorTest, StatelessSteadyState) {
   static constexpr char xml[] = R"(
   <mujoco>
